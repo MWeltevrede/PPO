@@ -1,4 +1,3 @@
-from gym.spaces import Box, Discrete
 import numpy as np
 import torch
 from torch.optim import Adam
@@ -8,8 +7,7 @@ import math, os, pickle
 class PPO():
     """
     Description: 
-        Proximal Policy Optimization (the clipping variant),
-        with early stopping based on approximate KL-divergence
+        Proximal Policy Optimization (the clipping variant) implemented in PyTorch.
     """
     
     def __init__(self, env, actor_critic, buffer_size=4096, max_steps=int(1e6), gamma=0.99,
