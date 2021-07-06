@@ -184,7 +184,7 @@ class PPO():
     def __init__(self, env_constructor, ac_constructor, buffer_size=4096, max_steps=int(1e6), gamma=0.99,
                  clip_ratio=0.2, lr=3e-4, epochs=10, batch_size=64,
                  lam=0.97, save_freq=10, save_path="models", log_path="tensorboard/ppo", device=torch.device('cpu'), 
-                 input_normalization=True, time_feature=False, max_ep_len=1000, num_workers=1, seed=0):
+                 input_normalization=True, max_ep_len=1000, num_workers=1, seed=0):
         """
         Args:
             env_constructor: A constructor function for an environment that follows the OpenAI Gym API
@@ -245,8 +245,6 @@ class PPO():
             
             input_normalization (bool): Whether or not to use input normalization.
             
-            time_feature (bool): Whether to add the time remaining untill the end of the episode (as defined by max_ep_len) to the observation.
-            
             max_ep_len (int): Maximum length of an episode.
             
             num_workers (int): Number of parallel cpu workers that collect experience.
@@ -296,11 +294,6 @@ class PPO():
         self.critic_optimizer = Adam(self.actor_critic.critic.parameters(), lr=lr)
         self.critic_loss = torch.nn.MSELoss()
         
-        
-        self.time_feature = time_feature
-        if time_feature:
-            self.obs_dim[0] += 1
-        
         self.input_norm = input_normalization
         if input_normalization:
             # aggragate used for input normalization
@@ -331,14 +324,6 @@ class PPO():
             mean, var = finalize(self.input_aggregate[i])
             states[:,i] = (states[:,i] - mean) / max(math.sqrt(var), 1e-6)
         return states
-    
-    def _add_time_feature(self, obs, t):
-        """
-            Add remaining time before the end of an episode (as defined by maximum episode length) 
-            to the observations.
-        """
-        new_obs = np.append(obs, np.array([self.max_ep_len - t], dtype=obs.dtype))
-        return new_obs
     
     def _update_aggregate(self, new_aggregate):
         """
