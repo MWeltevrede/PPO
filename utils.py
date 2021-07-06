@@ -15,7 +15,7 @@ def discount_cumsum(x, discount):
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
 
-def update(existingAggregate, newValue):
+def update_single(existingAggregate, newValue):
     """
     From https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance.
     
@@ -32,6 +32,27 @@ def update(existingAggregate, newValue):
     delta2 = newValue - mean
     M2 += delta * delta2
     return (count, mean, M2)
+
+def update_sets(aggregate_A, aggregate_B):
+    """
+    From https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance.
+    
+    Combines the aggregates of two sets of data
+    input: 
+        aggregate A, aggregate B
+    output:
+        aggregate AB
+    """
+    (n_A, m_A, M2_A) = aggregate_A
+    (n_B, m_B, M2_B) = aggregate_B
+    
+    n = n_A + n_B
+    mean = (n_A*m_A + n_B*m_B) / n
+    
+    delta = m_B - m_A
+    M2 = M2_A + M2_B + delta ** 2 * n_A * n_B / n
+    
+    return (n, mean, M2)
 
 
 def finalize(existingAggregate):

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 from torch.nn.functional import softplus
+import traceback
 
 class MLPActorCritic(nn.Module):
     
@@ -37,7 +38,15 @@ class MLPActorCritic(nn.Module):
         outputs = self.actor(states)
         sd_constant = self.initial_sd  + torch.log(1 - torch.exp(-self.initial_sd)) 
 
-        dis = Normal(outputs[:,:self.num_actions], softplus(outputs[:,self.num_actions:] + sd_constant))
+        try:
+            dis = Normal(outputs[:,:self.num_actions], softplus(outputs[:,self.num_actions:] + sd_constant))
+        except Exception as e:
+            print(f"Exception caught: {e}")
+            traceback.print_exc()
+            
+            print(f"loc: {outputs[:, :self.num_actions]}")
+            print(f"scale: {softplus(outputs[:,self.num_actions:] + sd_constant)}")
+            raise e
         
         return dis
 
