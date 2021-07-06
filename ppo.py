@@ -2,7 +2,8 @@ import numpy as np
 import torch
 from torch.optim import Adam
 from utils import discount_cumsum, update, finalize
-import math, os, pickle
+import math, os, pickle, shutil, time
+from torch.utils.tensorboard import SummaryWriter
 
 class PPO():
     """
@@ -12,7 +13,7 @@ class PPO():
     
     def __init__(self, env, actor_critic, buffer_size=4096, max_steps=int(1e6), gamma=0.99,
                  clip_ratio=0.2, lr=3e-4, epochs=10, batch_size=64,
-                 lam=0.97, save_freq=10, save_path="models", device=torch.device('cpu'), 
+                 lam=0.97, save_freq=10, save_path="models", log_path="tensorboard/ppo", device=torch.device('cpu'), 
                  input_normalization=True, time_feature=False, max_ep_len=1000):
         """
         Args:
@@ -62,6 +63,9 @@ class PPO():
             
             save_path (string): Directory in which to save the models.
             
+            log_path (string): Directory in which to log the tensorboard scalars.
+                               Note that it will overwrite any logs already in this directory.
+            
             input_normalization (bool): Whether or not to use input normalization.
             
             time_feature (bool): Whether to add the time remaining untill the end of the episode (as defined by max_ep_len) to the observation.
@@ -102,6 +106,10 @@ class PPO():
         if input_normalization:
             # aggragate used for input normalization
             self.input_aggregate = [(0, 0, 0) for _ in range(self.obs_dim)]
+            
+        if os.path.exists(log_path):
+            shutil.rmtree(log_path)
+        self.writer = SummaryWriter(log_dir=log_path)
         
     def _policy_loss(self, states, actions, advantage, logp_old):
         """
@@ -304,6 +312,9 @@ class PPO():
         
         step_id = 0
         iteration = 0
+        start = time.time()
+        
+        
         while step_id < self.max_steps:
             iteration += 1
             
@@ -314,6 +325,13 @@ class PPO():
             avg_length += np.mean(lengths) / print_freq
             avg_loss += mean_loss / print_freq
             avg_kl += mean_kl / print_freq
+            
+            self.writer.add_scalar("return", np.mean(returns), step_id)
+            self.writer.add_scalar("episode length", np.mean(lengths), step_id)
+            self.writer.add_scalar("loss", mean_loss, step_id)
+            self.writer.add_scalar("kl", mean_kl, step_id)
+            time_elapsed = time.time() - start
+            self.writer.add_scalar("speed", step_id/time_elapsed, step_id)
             
             if iteration % self.save_freq == 0 and not iteration == 0:
                 print(f"Saved model at iteration: {iteration}")
@@ -333,3 +351,5 @@ class PPO():
                 avg_length = 0
                 avg_loss = 0
                 avg_kl = 0
+                
+        self.writer.close()
