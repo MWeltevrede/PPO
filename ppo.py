@@ -111,7 +111,7 @@ class WorkerProcess(mp.Process):
                 action = actor_critic.get_action(state_tensor)
                 value = actor_critic.critic(state_tensor).item()
 
-            obs, reward, done, _ = env.step(action)
+            obs, reward, done, info = env.step(action)
 
             batch_states.append(state.copy())
             batch_actions.append(action)
@@ -138,12 +138,13 @@ class WorkerProcess(mp.Process):
                         last_val = actor_critic.critic(obs_tensor).item()
                 elif done:
                     last_val = 0
-                    if reward <= -100:
-                        # I lost
-                        batch_wins.append(0)
-                    else:
-                        # I won
-                        batch_wins.append(1)
+                    if 'win' in info:
+                        if info['win']:
+                            # I won
+                            batch_wins.append(1)
+                        else:
+                            # I lost
+                            batch_wins.append(0)
 
                 # allow for value/reward bootstrapping if episode is prematurely terminated
                 r = np.append(np.array(rewards), last_val)
@@ -181,9 +182,9 @@ class PPO():
     """
     
     def __init__(self, env_constructor, ac_constructor, buffer_size=4096, max_steps=int(1e6), gamma=0.99,
-                 clip_ratio=0.2, lr=3e-4, epochs=10, batch_size=64,
-                 lam=0.97, save_freq=10, save_path="models", log_path="tensorboard/ppo", device=torch.device('cpu'), 
-                 input_normalization=True, max_ep_len=1000, num_workers=1, seed=0):
+                 clip_ratio=0.2, lr=3e-4, epochs=10, batch_size=64, lam=0.97, save_freq=10, 
+                 save_path="models", log_path="tensorboard/ppo", loading_type="none", load_path="models", 
+                 device=torch.device('cpu'), input_normalization=True, max_ep_len=1000, num_workers=1, seed=0):
         """
         Args:
             env_constructor: A constructor function for an environment that follows the OpenAI Gym API
@@ -241,6 +242,13 @@ class PPO():
             
             log_path (string): Directory in which to log the tensorboard scalars.
                                Note that it will overwrite any logs already in this directory.
+                               
+            loading_type (string): Specify how to use the model stored in "load_path":
+                                        "none": don't load an existing model.
+                                        "warmstart": use as a warmstart for the training process.
+                                        "checkpoint": use as a checkpoint to continue training.
+            
+            load_path (string): File path that stores the model from which to continue training.
             
             input_normalization (bool): Whether or not to use input normalization.
             
@@ -261,6 +269,8 @@ class PPO():
         self.lam = lam
         self.save_freq = save_freq
         self.save_path = save_path
+        self.loading_type = loading_type
+        self.load_path = load_path
         self.device = device
         self.max_ep_len = max_ep_len
         temp_env = env_constructor()
@@ -298,9 +308,31 @@ class PPO():
             # aggragate used for input normalization
             self.input_aggregate = [(0, 0, 0) for _ in range(self.obs_dim[0])]
             
-        if os.path.exists(log_path):
-            shutil.rmtree(log_path)
-        self.writer = SummaryWriter(log_dir=log_path)
+        if self.loading_type == "none":
+            self.initial_steps = 0
+            self.initial_iteration = 0
+            self.writer = SummaryWriter(log_dir=log_path, purge_step=self.initial_steps)
+        elif self.loading_type == "warmstart":
+            checkpoint = torch.load(self.load_path)
+            self.actor_critic.actor.load_state_dict(checkpoint['actor_state_dict'], strict=False)
+            self.actor_critic.critic.load_state_dict(checkpoint['critic_state_dict'], strict=False)
+            self.input_aggregate = checkpoint['input_aggregate']
+            self.initial_steps = 0
+            self.initial_iteration = 0
+            self.writer = SummaryWriter(log_dir=log_path, purge_step=self.initial_steps)
+        elif self.loading_type == "checkpoint":
+            checkpoint = torch.load(self.load_path)
+            self.actor_critic.actor.load_state_dict(checkpoint['actor_state_dict'])
+            self.actor_critic.critic.load_state_dict(checkpoint['critic_state_dict'])
+            self.input_aggregate = checkpoint['input_aggregate']
+            self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
+            self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+            self.initial_steps = checkpoint['steps']
+            self.initial_iteration = checkpoint['iterations']
+            self.writer = SummaryWriter(log_dir=log_path, purge_step=self.initial_steps)
+        else:
+            print("Wrong loading type! Choose between: 'none', 'warmstart' or 'checkpoint'")
+            assert false
         
     def _policy_loss(self, states, actions, advantage, logp_old):
         """
@@ -459,8 +491,8 @@ class PPO():
         avg_loss = 0
         avg_kl = 0
         
-        step_id = 0
-        iteration = 0
+        step_id = self.initial_steps
+        iteration = self.initial_iteration
         start = time.time()
         
         try:
@@ -504,20 +536,21 @@ class PPO():
                 self.writer.add_scalar("loss", mean_loss, step_id)
                 self.writer.add_scalar("kl", mean_kl, step_id)
                 time_elapsed = time.time() - start
-                self.writer.add_scalar("speed", step_id/time_elapsed, step_id)
+                self.writer.add_scalar("speed", (step_id-self.initial_steps)/time_elapsed, step_id)
 
                 if iteration % self.save_freq == 0 and not iteration == 0:
                     print(f"Saved model at iteration: {iteration}")
 
                     # save model
                     filename = self.save_path + f"/iteration{int(iteration)}.pt"
-                    torch.save(self.actor_critic.actor.state_dict(), filename)
-
-                    # save input aggregate
-                    if self.input_norm:
-                        filename = self.save_path + f"/aggregate{int(iteration)}.p"
-                        with open(filename, 'wb') as filehandler:
-                            pickle.dump(self.input_aggregate, filehandler)
+                    torch.save({'actor_state_dict':self.actor_critic.actor.state_dict(),
+                                'critic_state_dict':self.actor_critic.critic.state_dict(),
+                                'actor_optimizer_state_dict':self.actor_optimizer.state_dict(),
+                                'critic_optimizer_state_dict':self.critic_optimizer.state_dict(),
+                                'input_aggregate':self.input_aggregate,
+                                'steps':step_id,
+                                'iterations':iteration
+                               }, filename)
 
                 if iteration % print_freq == 0 and not iteration == 0:
                     print(f"Iteration: {iteration}, steps: {step_id}, mean loss: {avg_loss}, mean KL divergence: {avg_kl} average return: {avg_return}, average episode length: {avg_length}")
